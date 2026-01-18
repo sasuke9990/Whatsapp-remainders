@@ -1,119 +1,160 @@
-import requests, json, time, schedule, threading
+bc# ~Sαѕυкє
 
-# ========== CONFIG ==========
-API_URL = "https://7105.api.greenapi.com"
-ID_INSTANCE = "7105480420"
-API_TOKEN = "356dfef946cf4c9c948744bca9b2cab3912cfc19c37e4bb1b6"
+import os
+import json
+import requests
+from datetime import datetime
+from flask import Flask
+from apscheduler.schedulers.background import BackgroundScheduler
 
-ADMIN = "916361638776@c.us"
-DATA_FILE = "data.json"
+API_BASE = "https://7105.api.greenapi.com"
+GREEN_API_INSTANCE = "7105480420"
+GREEN_API_TOKEN = "356dfef946cf4c9c948744bca9b2cab3912cfc19c37e4bb1b6"
 
+ADMIN_NUMBER = "916361638776"
+DEFAULT_GROUP = "120363425002130781@g.us"
 
-# ========== BASIC ==========
-def send_message(chat_id, text):
-    url = f"{API_URL}/waInstance{ID_INSTANCE}/sendMessage/{API_TOKEN}"
-    requests.post(url, json={"chatId": chat_id, "message": text})
+FILE = "reminders.json"
 
+app = Flask(__name__)
+scheduler = BackgroundScheduler()
+sent = set()
 
 def load():
-    try:
-        return json.load(open(DATA_FILE))
-    except:
-        return {"users": {}, "groups": {}}
-
+    if not os.path.exists(FILE):
+        with open(FILE, "w") as f:
+            json.dump({"groups": {}, "reminders": {}}, f)
+    with open(FILE, "r") as f:
+        return json.load(f)
 
 def save(data):
-    json.dump(data, open(DATA_FILE, "w"), indent=2)
+    with open(FILE, "w") as f:
+        json.dump(data, f, indent=4)
 
+def send(chat, msg):
+    url = f"{API_BASE}/waInstance{GREEN_API_INSTANCE}/sendMessage/{GREEN_API_TOKEN}"
+    requests.post(url, json={"chatId": chat, "message": msg}, timeout=10)
 
-data = load()
+def startup():
+    send(ADMIN_NUMBER + "@c.us", "This bot is ready and working fine ~Sαѕυкє")
 
+def commands(sender, text):
+    data = load()
+    parts = text.strip().split(" ", 4)
 
-# ========== REMINDER SYSTEM ==========
-def add_reminder(user, day, time_, msg):
-    data["users"].setdefault(user, []).append({
-        "day": day, "time": time_, "msg": msg
-    })
-    save(data)
-
-
-def clear_day(user, day):
-    if user in data["users"]:
-        data["users"][user] = [r for r in data["users"][user] if r["day"] != day]
+    if text.startswith("!addgroup"):
+        if len(parts) < 3:
+            return "Use: !addgroup name groupId"
+        data["groups"][parts[1]] = parts[2]
         save(data)
+        return "Group saved"
 
-
-def list_reminders(user):
-    if user not in data["users"] or not data["users"][user]:
-        return "No reminders set."
-    text = "Your reminders:\n"
-    for r in data["users"][user]:
-        text += f'{r["day"]} {r["time"]} → {r["msg"]}\n'
-    return text
-
-
-# ========== GROUP SYSTEM ==========
-def add_group(name, gid):
-    data["groups"][name] = gid
-    save(data)
-
-
-def add_group_reminder(group, day, time_, msg):
-    data["groups"].setdefault(group+"_rem", []).append({
-        "day": day, "time": time_, "msg": msg
-    })
-    save(data)
-
-
-# ========== SCHEDULER ==========
-def run_scheduler():
-    def check():
-        now = time.strftime("%A %H:%M")
-
-        # users
-        for user in data["users"]:
-            for r in data["users"][user]:
-                if f'{r["day"]} {r["time"]}' == now:
-                    send_message(user, r["msg"])
-
-        # groups
+    if text.startswith("!groups"):
+        if not data["groups"]:
+            return "No groups"
+        out = "Groups\n\n"
         for g in data["groups"]:
-            key = g+"_rem"
-            if key in data:
-                for r in data[key]:
-                    if f'{r["day"]} {r["time"]}' == now:
-                        send_message(data["groups"][g], r["msg"])
+            out += g + " -> " + data["groups"][g] + "\n"
+        return out
 
-    schedule.every(1).minutes.do(check)
-    while True:
-        schedule.run_pending()
-        time.sleep(1)
+    if text.startswith("!setgroup"):
+        if len(parts) < 5:
+            return "Use: !setgroup group Monday 07:00 Message"
+        g = parts[1]
+        d = parts[2].capitalize()
+        t = parts[3]
+        m = parts[4]
+        if g not in data["groups"]:
+            return "Group not found"
+        data["reminders"].setdefault(d, []).append({"time": t, "message": m, "group": g})
+        save(data)
+        return "Saved"
 
+    if text.startswith("!set"):
+        if len(parts) < 4:
+            return "Use: !set Monday 07:00 Message"
+        d = parts[1].capitalize()
+        t = parts[2]
+        m = parts[3]
+        data["reminders"].setdefault(d, []).append({"time": t, "message": m, "group": "__default__"})
+        save(data)
+        return "Saved"
 
-# ========== COMMAND HANDLER ==========
-def handle(chat, msg):
-    p = msg.split()
+    if text.startswith("!list"):
+        if not data["reminders"]:
+            return "No reminders"
+        out = "Reminders\n\n"
+        for d in data["reminders"]:
+            out += d + "\n"
+            for r in data["reminders"][d]:
+                out += r["time"] + " -> " + r["message"] + " [" + r["group"] + "]\n"
+            out += "\n"
+        return out
 
-    if msg.startswith("!set"):
-        add_reminder(chat, p[1], p[2], " ".join(p[3:]))
-        send_message(chat, "Reminder set ✅")
+    if text.startswith("!clear"):
+        if len(parts) < 2:
+            return "Use: !clear Monday"
+        d = parts[1].capitalize()
+        if d in data["reminders"]:
+            del data["reminders"][d]
+            save(data)
+            return "Cleared"
+        else:
+            return "Nothing found"
 
-    elif msg == "!list":
-        send_message(chat, list_reminders(chat))
+    return None
 
-    elif msg.startswith("!clear"):
-        clear_day(chat, p[1])
-        send_message(chat, "Cleared ✅")
+def inbox():
+    url = f"{API_BASE}/waInstance{GREEN_API_INSTANCE}/receiveNotification/{GREEN_API_TOKEN}"
+    try:
+        res = requests.get(url, timeout=10).json()
+    except:
+        return
+    if not res:
+        return
 
-    elif msg.startswith("!addgroup"):
-        add_group(p[1], p[2])
-        send_message(chat, "Group added ✅")
+    body = res.get("body", {})
+    rid = res.get("receiptId")
 
-    elif msg.startswith("!setgroup"):
-        add_group_reminder(p[1], p[2], p[3], " ".join(p[4:]))
-        send_message(chat, "Group reminder set ✅")
+    if body.get("typeWebhook") == "incomingMessageReceived":
+        sender = body.get("senderData", {}).get("sender", "")
+        text = body.get("messageData", {}).get("textMessageData", {}).get("textMessage", "")
+        if sender.replace("@c.us", "") == ADMIN_NUMBER:
+            reply = commands(sender, text)
+            if reply:
+                send(sender, reply)
 
+    if rid:
+        requests.delete(f"{API_BASE}/waInstance{GREEN_API_INSTANCE}/deleteNotification/{GREEN_API_TOKEN}/{rid}")
 
-# ========== START ==========
-threading.Thread(target=run_scheduler).start()
-send_message(ADMIN, "Reminder bot is running ✅")
+def engine():
+    now = datetime.now()
+    d = now.strftime("%A")
+    t = now.strftime("%H:%M")
+    key = d + "_" + t
+    data = load()
+
+    if d in data["reminders"]:
+        for r in data["reminders"][d]:
+            if r["time"] == t and key not in sent:
+                if r["group"] == "__default__":
+                    gid = DEFAULT_GROUP
+                else:
+                    gid = data["groups"].get(r["group"])
+                if gid:
+                    send(gid, r["message"])
+                sent.add(key)
+
+    inbox()
+
+@app.route("/")
+def home():
+    return "~Sαѕυкє bot running"
+
+if __name__ == "__main__":
+    scheduler.add_job(engine, "interval", seconds=30)
+    scheduler.start()
+    startup()
+    app.run(host="0.0.0.0", port=10000)
+
+# ~Sαѕυкє
